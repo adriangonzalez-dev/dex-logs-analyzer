@@ -1,0 +1,46 @@
+=========================================
+  RESUMEN DE LOGS - DEXMANAGER PLAYER
+=========================================
+
+1. ESTRUCTURA DE CADA LÍNEA
+-----------------------------------------
+El formato general de cada línea es el siguiente:
+YYYY-MM-DD HH:mm:ss.SS NIVEL [Componente] Mensaje libre
+
+Ejemplo:
+2026-02-19 00:00:26.59 INFO [Media tags manager] Media tags status set
+
+Campos desglosados:
+- Fecha: YYYY-MM-DD (Ej: 2026-02-19)
+- Hora: HH:mm:ss.SS (Ej: 00:00:26.59)
+- NIVEL: Criticidad / Categoría del evento.
+- [Componente]: Módulo del sistema que generó el log (siempre entre corchetes).
+- Mensaje: Detalles de estado, paths de archivos, jsons de sincronización, comandos recibidos, etc.
+
+2. NIVELES DE LOG IDENTIFICADOS
+-----------------------------------------
+- INFO:     Eventos regulares, cambios de estado, respuestas exitosas y traza general (La mayoría de los logs).
+- DEBUG:    Traza técnica como tiempos de latencia (ej. "ElapsedMasterToSlave"), y ciclos de verificación.
+- SUCCESS:  Confirmaciones vitales como "Panel Locked" o "Heartbeat received".
+- WARNING:  Advertencias no críticas del sistema.
+- ERROR:    Casos de falla, errores sintácticos, APIs inalcanzables.
+
+3. COMPONENTES FRECUENTES (TOP)
+-----------------------------------------
+- [McDonald's Template]: (Manejador de APIs y plantillas para listados de precios, XML fetch, y estado general comercial) ~ 40%
+- [Player]: Lógica pesada, sincronización en grupo, lectura the tags, playlist ended, reproducción de mediass.
+- [System Manager]: Consumos de CPU, Memoria RAM (ej. "CPU: 27.00%. Used RAM: 1124.96 Mb"), tiempos de reboot y Heartbeats vs el Server.
+- [Hardware Policies] & [Input Manager]: Bloqueos del panel físico (Control inhabilitado).
+- [Screen Manager]: Sincronización continua Maestro-Esclavo y carga de Media local en pantalla.
+- [Node]: Recepción e intercambio de tags HTTP.
+- [Download Manager]: Estados de descargas pendients (Downloading false/true).
+- [Media tags manager] & [ShouldPlay]: Validación que permite/inhibe reproducir las "Medias" según tags presentes vs ignorados.
+- [Screenshots Manager]: Motor de captura de pantallas y procesos de subida a "/DexStorage".
+
+4. QUÉ BUSCAR Y CÓMO ENCONTRARLO FÁCIL
+-----------------------------------------
+- Para investigar picos de rendimiento: Filtrar por [System Manager] y el regex o string "Used RAM".
+- Verificación si un video/media se reprodujo: Filtrar por [Player] buscando "PLAY Command received. Media".
+- Por qué un video no reprodujo: Filtrar por [ShouldPlay] buscar "Excluded due to missing tag" u o "Don't play".
+- Para ver errores de las Listas de Precios de McDonald's: Buscar [McDonald's Template] y cruzarlo con un nivel de ERROR o WARNING, buscando "Fetch xml", "ProductPricing" o "Server address". 
+- Problemas de sincronización en red de pantallas esclavas: Buscar [Screen Manager] e indagar en los valores de "ElapsedMasterToSlave".

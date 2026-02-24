@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Analizador Logs AI</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="glow-orb"></div>
+      <h1>Log Analyzer <span class="accent">AI</span></h1>
+      <p>Configura tu API Key de Gemini para activar los superpoderes de análisis.</p>
+    </div>
+    
+    <div class="input-group">
+      <label for="apiKey">Gemini API Key</label>
+      <input type="password" id="apiKey" placeholder="Pegá tu key acá (ej: AIzaSy...)">
+    </div>
+    
+    <button id="saveBtn">
+      <span class="btn-text">Guardar Configuración</span>
+      <div class="btn-glow"></div>
+    </button>
+    <div id="status" class="status-msg hidden"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
