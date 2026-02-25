@@ -116,6 +116,14 @@ input::placeholder {
     transition: opacity 0.3s;
 }
 
+.status-msg.success {
+    color: #16a34a;
+}
+
+.status-msg.error {
+    color: #dc2626;
+}
+
 .hidden {
     opacity: 0;
     pointer-events: none;
@@ -375,6 +383,10 @@ body.dark #saveBtn:hover {
     background: #4338ca;
 }
 
-body.dark .status-msg {
+body.dark .status-msg.success {
     color: #4ade80;
+}
+
+body.dark .status-msg.error {
+    color: #f87171;
 }

@@ -321,7 +321,6 @@ function openAnalyzerModal(rawText) {
                         <button class="ala-bookmark-next" title="Bookmark siguiente">&#9660;</button>
                     </span>
                     <button class="ala-dark-toggle" title="Dark mode">&#9789;</button>
-                    <button class="ala-sync-btn" title="Sincronizar con otros tabs">&#128279; Sync</button>
                     <button class="ala-close-btn">&#10005;</button>
                 </div>
                 <div class="ala-controls">
@@ -408,7 +407,7 @@ function openAnalyzerModal(rawText) {
     const timeFrom = overlay.querySelector('.ala-time-from');
     const timeTo = overlay.querySelector('.ala-time-to');
 
-    // Pre-build search index
+    // Pre-build search index (cache DOM refs for perf)
     const lineIndex = [];
     overlay.querySelectorAll('.ala-log-body .ala-line').forEach(el => {
         lineIndex.push({
@@ -416,13 +415,17 @@ function openAnalyzerModal(rawText) {
             level: el.dataset.level || '',
             comp: el.dataset.comp || '',
             hm: el.dataset.hm || '',
-            text: el.dataset.text || ''
+            text: el.dataset.text || '',
+            msgSpan: el.querySelector('.ala-msg')
         });
     });
 
-    // Optimized filter
+    // Optimized filter — show/hide is fast, highlight is deferred
     let filterRAF = 0;
     let regexMode = false;
+    let highlightTimer = 0;
+    let saveTimer = 0;
+
     function scheduleFilter() {
         cancelAnimationFrame(filterRAF);
         filterRAF = requestAnimationFrame(() => {
@@ -470,34 +473,46 @@ function openAnalyzerModal(rawText) {
                     el.classList.toggle('hidden', !show);
                 }
                 if (show) visibleCount++;
-
-                // Highlight matches (F4)
-                const msgSpan = el.querySelector('.ala-msg');
-                if (msgSpan) {
-                    const original = msgSpan.dataset.original || '';
-                    if (term && show && original) {
-                        let highlighted;
-                        if (regexMode && searchRegex) {
-                            searchRegex.lastIndex = 0;
-                            highlighted = original.replace(searchRegex, m => `<mark class="ala-highlight">${m}</mark>`);
-                        } else {
-                            const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                            highlighted = original.replace(new RegExp(`(${escaped})`, 'gi'), '<mark class="ala-highlight">$1</mark>');
-                        }
-                        msgSpan.innerHTML = renderMessageWithJSON(highlighted);
-                    } else if (original && msgSpan.querySelector('.ala-highlight')) {
-                        msgSpan.innerHTML = renderMessageWithJSON(original);
-                    }
-                }
             }
 
             // Update visible count
             const countEl = overlay.querySelector('.ala-visible-count');
             if (countEl) countEl.textContent = `Mostrando ${visibleCount} de ${lineIndex.length}`;
 
-            // Save filter state (F10)
-            saveFilterState(overlay);
+            // Deferred highlight (F4) — avoids innerHTML rewrite blocking filter
+            clearTimeout(highlightTimer);
+            highlightTimer = setTimeout(() => applyHighlight(term, regexMode, searchRegex), 250);
+
+            // Throttled persistence (F10)
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(() => saveFilterState(overlay), 500);
         });
+    }
+
+    function applyHighlight(term, isRegex, searchRegex) {
+        for (let i = 0; i < lineIndex.length; i++) {
+            const { el, msgSpan } = lineIndex[i];
+            if (!msgSpan) continue;
+            const original = msgSpan.dataset.original || '';
+            if (!original) continue;
+            const isVisible = !el.classList.contains('hidden');
+
+            if (term && isVisible) {
+                let highlighted;
+                if (isRegex && searchRegex) {
+                    searchRegex.lastIndex = 0;
+                    highlighted = original.replace(searchRegex, m => `<mark class="ala-highlight">${m}</mark>`);
+                } else {
+                    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    highlighted = original.replace(new RegExp(`(${escaped})`, 'gi'), '<mark class="ala-highlight">$1</mark>');
+                }
+                if (highlighted !== original) {
+                    msgSpan.innerHTML = renderMessageWithJSON(highlighted);
+                }
+            } else if (msgSpan.querySelector('.ala-highlight')) {
+                msgSpan.innerHTML = renderMessageWithJSON(original);
+            }
+        }
     }
 
     // Close
@@ -567,19 +582,19 @@ function openAnalyzerModal(rawText) {
         URL.revokeObjectURL(url);
     };
 
-    // ─── Copy Line (F5) ─────────────────────────────────────────────────
-    overlay.querySelectorAll('.ala-line').forEach(line => {
-        line.addEventListener('click', (e) => {
-            if (e.target.closest('.ala-line-bookmark') || e.target.closest('.ala-explain-btn') || e.target.closest('.ala-json-toggle') || e.target.closest('.ala-json-content')) return;
-            const raw = line.dataset.raw || line.textContent;
-            navigator.clipboard.writeText(raw).then(() => {
-                const toast = document.createElement('div');
-                toast.className = 'ala-toast';
-                toast.textContent = '✓ Copiado';
-                line.style.position = 'relative';
-                line.appendChild(toast);
-                setTimeout(() => toast.remove(), 1500);
-            });
+    // ─── Copy Line (F5) — event delegation for perf ──────────────────────
+    overlay.querySelector('.ala-log-body').addEventListener('click', (e) => {
+        if (e.target.closest('.ala-line-bookmark') || e.target.closest('.ala-explain-btn') || e.target.closest('.ala-json-toggle') || e.target.closest('.ala-json-content')) return;
+        const line = e.target.closest('.ala-line');
+        if (!line) return;
+        const raw = line.dataset.raw || line.textContent;
+        navigator.clipboard.writeText(raw).then(() => {
+            const toast = document.createElement('div');
+            toast.className = 'ala-toast';
+            toast.textContent = '✓ Copiado';
+            line.style.position = 'relative';
+            line.appendChild(toast);
+            setTimeout(() => toast.remove(), 1500);
         });
     });
 
@@ -598,32 +613,6 @@ function openAnalyzerModal(rawText) {
     darkToggle.onclick = () => {
         const isDark = overlay.querySelector('.ala-modal').classList.contains('ala-dark');
         applyDarkMode(!isDark);
-    };
-
-    // ─── Sync Button (F15) ──────────────────────────────────────────────
-    const syncBtn = overlay.querySelector('.ala-sync-btn');
-    syncBtn.onclick = () => {
-        const syncPayload = {
-            deviceInfo,
-            healthData: healthData.length > 0 ? { lastCpu: healthData[healthData.length - 1].cpu, lastRam: healthData[healthData.length - 1].ram } : null,
-            memoryTrend,
-            apiStats,
-            errorCount: parsed.filter(p => p.level === 'ERROR').length,
-            warningCount: parsed.filter(p => p.level === 'WARNING').length,
-            totalLines: parsed.length,
-            timeRange: { from: minTime, to: maxTime },
-            syncGroupInfo,
-            timestamp: Date.now()
-        };
-        try {
-            if (chrome?.runtime?.sendMessage) {
-                chrome.runtime.sendMessage({ type: 'SYNC_LOG_DATA', payload: syncPayload }, () => {
-                    syncBtn.innerHTML = '&#9989; Sincronizado';
-                    syncBtn.classList.add('ala-synced');
-                    setTimeout(() => { syncBtn.innerHTML = '&#128279; Sync'; syncBtn.classList.remove('ala-synced'); }, 3000);
-                });
-            }
-        } catch (e) { console.error('Sync error:', e); }
     };
 
     // ─── JSON Toggle (F21) ──────────────────────────────────────────────
@@ -671,27 +660,27 @@ function openAnalyzerModal(rawText) {
         };
     });
 
-    // ─── Bookmarks ───────────────────────────────────────────────────────
+    // ─── Bookmarks — event delegation for perf ──────────────────────────
     const bookmarkCountEl = overlay.querySelector('.ala-bookmark-count');
 
     function updateBookmarkCount() {
         bookmarkCountEl.textContent = bookmarks.size;
     }
 
-    overlay.querySelectorAll('.ala-line-bookmark').forEach(bm => {
-        bm.onclick = (e) => {
-            e.stopPropagation();
-            const line = bm.parentElement;
-            const idx = line.dataset.idx;
-            if (bookmarks.has(idx)) {
-                bookmarks.delete(idx);
-                line.classList.remove('ala-bookmarked');
-            } else {
-                bookmarks.add(idx);
-                line.classList.add('ala-bookmarked');
-            }
-            updateBookmarkCount();
-        };
+    overlay.querySelector('.ala-log-body').addEventListener('click', (e) => {
+        const bm = e.target.closest('.ala-line-bookmark');
+        if (!bm) return;
+        e.stopPropagation();
+        const line = bm.parentElement;
+        const idx = line.dataset.idx;
+        if (bookmarks.has(idx)) {
+            bookmarks.delete(idx);
+            line.classList.remove('ala-bookmarked');
+        } else {
+            bookmarks.add(idx);
+            line.classList.add('ala-bookmarked');
+        }
+        updateBookmarkCount();
     });
 
     // Bookmark navigation
@@ -1957,7 +1946,7 @@ const ALA_CSS = `
 .ala-alert-neutral { background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; }
 
 /* ─── Charts ────────────────────────────────────────────────────────────── */
-.ala-dash-chart-card { overflow: hidden; }
+.ala-dash-chart-card { overflow: visible; }
 
 .ala-chart-container { display: flex; flex-direction: column; gap: 4px; }
 
