@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
   <meta charset="UTF-8">
   <title>Log Analyzer</title>
   <link rel="stylesheet" href="popup.css">
 </head>
+
 <body>
   <div class="container">
     <div class="header">
@@ -19,7 +21,32 @@
 
     <button id="saveBtn">Guardar</button>
     <div id="status" class="status-msg hidden"></div>
+
+    <div class="separator"></div>
+
+    <div class="section">
+      <div class="section-header">
+        <h2>Preferencias</h2>
+      </div>
+      <div class="toggle-row">
+        <span>Modo Oscuro</span>
+        <button id="darkToggle" class="toggle-btn">&#9789;</button>
+      </div>
+    </div>
+
+    <div class="separator"></div>
+
+    <div class="section">
+      <div class="section-header">
+        <h2>Comparación Multi-Player</h2>
+        <button id="clearSync" class="clear-btn" title="Limpiar datos">&#10006;</button>
+      </div>
+      <div id="syncedPlayers" class="synced-players">
+        <p class="empty-sync">Sin datos sincronizados. Abre logs en distintos tabs y clickea "Sync".</p>
+      </div>
+    </div>
   </div>
   <script src="popup.js"></script>
 </body>
+
 </html>

@@ -27,7 +27,7 @@ try {
     fetch(chrome.runtime.getURL('resume.txt'))
         .then(r => r.text())
         .then(t => { contextFileText = t; })
-        .catch(() => {});
+        .catch(() => { });
 } catch (e) { /* chrome.runtime not available in this frame */ }
 
 // ─── Detection Loop ──────────────────────────────────────────────────────────
@@ -86,6 +86,9 @@ const multicastRegex = /Multicast Group Name:\s*"([^"]+)".*IP:\s*([\d.]+)/;
 const duidRegex = /Getting System DUID/;
 const dexConfigRegex = /Found dex_config\.xml/;
 const integrityFailRegex = /Missing Content:\s*(\d+)\s*files?\.\s*Media:\s*(.+)/;
+const downloadStartRegex = /Downloading (true|false)/;
+const downloadCompleteRegex = /Download.*?(?:complete|finished|success)/i;
+const downloadErrorRegex = /Download.*?(?:error|fail|timeout)/i;
 
 // ─── Modal ───────────────────────────────────────────────────────────────────
 function openAnalyzerModal(rawText) {
@@ -112,6 +115,7 @@ function openAnalyzerModal(rawText) {
     const rebootData = [];
     const apiHealth = [];
     const syncEvents = [];
+    const downloadData = [];
 
     lines.forEach((line, index) => {
         if (!line.trim()) return;
@@ -265,6 +269,14 @@ function openAnalyzerModal(rawText) {
                 syncEvents.push({ time: hm, timeFull: time, event: 'Integrity Fail', detail: `${intFail[1]} files missing: ${intFail[2]}` });
             }
 
+            // Download events (F13)
+            if (comp === '[Download Manager]' || comp === '[Screenshots Manager]') {
+                const dlStart = message.match(downloadStartRegex);
+                if (dlStart) downloadData.push({ time: hm, timeFull: time, type: dlStart[1] === 'true' ? 'downloading' : 'idle', message, level });
+                if (downloadCompleteRegex.test(message)) downloadData.push({ time: hm, timeFull: time, type: 'complete', message, level });
+                if (downloadErrorRegex.test(message) || level === 'ERROR') downloadData.push({ time: hm, timeFull: time, type: 'error', message, level });
+            }
+
             // Detect reboot (DUID + dex_config sequence)
             if (duidRegex.test(message)) {
                 syncEvents.push({ time: hm, timeFull: time, event: 'Device Boot', detail: 'System DUID initialization' });
@@ -285,6 +297,8 @@ function openAnalyzerModal(rawText) {
     const rebootInfo = analyzeReboots(rebootData, syncEvents);
     const mediaStats = buildMediaStats(mediaTimeline);
     const apiStats = buildApiStats(apiHealth);
+    const errorGroups = buildErrorGroups(parsed);
+    const downloadStats = buildDownloadStats(downloadData, syncEvents);
 
     // ─── Bookmarks State ─────────────────────────────────────────────────
     const bookmarks = new Set();
@@ -297,20 +311,25 @@ function openAnalyzerModal(rawText) {
             <div class="ala-header">
                 <div class="ala-title-row">
                     <span class="ala-title"><strong>Log Analyzer</strong></span>
-                    <input type="text" class="ala-search" placeholder="Buscar...">
+                    <div class="ala-search-group">
+                        <input type="text" class="ala-search" placeholder="Buscar...">
+                        <button class="ala-regex-toggle" title="Regex mode">.*</button>
+                    </div>
                     <span class="ala-bookmark-nav">
                         <span class="ala-bookmark-count" title="Bookmarks">0</span>
                         <button class="ala-bookmark-prev" title="Bookmark anterior">&#9650;</button>
                         <button class="ala-bookmark-next" title="Bookmark siguiente">&#9660;</button>
                     </span>
+                    <button class="ala-dark-toggle" title="Dark mode">&#9789;</button>
+                    <button class="ala-sync-btn" title="Sincronizar con otros tabs">&#128279; Sync</button>
                     <button class="ala-close-btn">&#10005;</button>
                 </div>
                 <div class="ala-controls">
                     <div class="ala-filter-row">
                         <div class="ala-levels">
-                            ${['INFO','DEBUG','WARNING','ERROR','SUCCESS'].map(l =>
-                                `<button class="ala-chip ala-level-chip active" data-level="${l}">${l}</button>`
-                            ).join('')}
+                            ${['INFO', 'DEBUG', 'WARNING', 'ERROR', 'SUCCESS'].map(l =>
+        `<button class="ala-chip ala-level-chip active" data-level="${l}">${l}</button>`
+    ).join('')}
                         </div>
                         <div class="ala-time-range">
                             <span class="ala-time-label">Hora</span>
@@ -322,11 +341,13 @@ function openAnalyzerModal(rawText) {
                     <div class="ala-components">
                         <button class="ala-chip ala-comp-toggle">Ninguno</button>
                         ${Array.from(components).map(c =>
-                            `<button class="ala-chip ala-comp-chip active" data-comp="${escapeHtml(c)}">${escapeHtml(c)}</button>`
-                        ).join('')}
+        `<button class="ala-chip ala-comp-chip active" data-comp="${escapeHtml(c)}">${escapeHtml(c)}</button>`
+    ).join('')}
                     </div>
                     <div class="ala-actions-row">
                         <button class="ala-summarize-btn">Resumir Logs</button>
+                        <button class="ala-export-btn">&#128229; Exportar TXT</button>
+                        <span class="ala-visible-count"></span>
                     </div>
                 </div>
             </div>
@@ -335,35 +356,39 @@ function openAnalyzerModal(rawText) {
                 <button class="ala-tab" data-tab="dashboard">Dashboard</button>
                 <button class="ala-tab" data-tab="timeline">Timeline</button>
                 <button class="ala-tab" data-tab="sync">Sync</button>
+                <button class="ala-tab" data-tab="downloads">Downloads</button>
             </div>
             <div class="ala-summary-container"></div>
             <div class="ala-tab-content active" data-content="logs">
                 <div class="ala-log-body">
                     ${parsed.map(p => {
-                        if (p.level) {
-                            return `<div class="ala-line" data-level="${p.level}" data-comp="${escapeHtml(p.comp)}" data-hm="${p.hm}" data-text="${escapeHtml(p.raw.toLowerCase())}" data-idx="${p.index}">` +
-                                `<span class="ala-line-bookmark" title="Bookmark"></span>` +
-                                `<span class="ala-date">${p.date}</span>` +
-                                `<span class="ala-time">${p.time}</span>` +
-                                `<span class="ala-level ala-${p.level.toLowerCase()}">${p.level}</span>` +
-                                `<span class="ala-comp">${escapeHtml(p.comp)}</span>` +
-                                `<span class="ala-msg">${escapeHtml(p.message)}</span>` +
-                                ((p.level === 'ERROR' || p.level === 'WARNING') ?
-                                    `<button class="ala-explain-btn" data-idx="${p.index}">&#10024; Explicar</button>` : '') +
-                                `</div>`;
-                        }
-                        return `<div class="ala-line ala-unparsed" data-text="${escapeHtml(p.raw.toLowerCase())}" data-idx="${p.index}"><span class="ala-line-bookmark" title="Bookmark"></span>${escapeHtml(p.raw)}</div>`;
-                    }).join('')}
+        if (p.level) {
+            return `<div class="ala-line" data-level="${p.level}" data-comp="${escapeHtml(p.comp)}" data-hm="${p.hm}" data-text="${escapeHtml(p.raw.toLowerCase())}" data-idx="${p.index}" data-raw="${escapeHtml(p.raw)}">` +
+                `<span class="ala-line-bookmark" title="Bookmark"></span>` +
+                `<span class="ala-date">${p.date}</span>` +
+                `<span class="ala-time">${p.time}</span>` +
+                `<span class="ala-level ala-${p.level.toLowerCase()}">${p.level}</span>` +
+                `<span class="ala-comp">${escapeHtml(p.comp)}</span>` +
+                `<span class="ala-msg" data-original="${escapeHtml(p.message)}">${renderMessageWithJSON(escapeHtml(p.message))}</span>` +
+                ((p.level === 'ERROR' || p.level === 'WARNING') ?
+                    `<button class="ala-explain-btn" data-idx="${p.index}">&#10024; Explicar</button>` : '') +
+                `</div>`;
+        }
+        return `<div class="ala-line ala-unparsed" data-text="${escapeHtml(p.raw.toLowerCase())}" data-idx="${p.index}" data-raw="${escapeHtml(p.raw)}"><span class="ala-line-bookmark" title="Bookmark"></span>${renderMessageWithJSON(escapeHtml(p.raw))}</div>`;
+    }).join('')}
                 </div>
             </div>
             <div class="ala-tab-content" data-content="dashboard">
-                ${buildDashboardHTML(deviceInfo, healthData, memoryTrend, rebootInfo, apiStats, syncGroupInfo)}
+                ${buildDashboardHTML(deviceInfo, healthData, memoryTrend, rebootInfo, apiStats, syncGroupInfo, errorGroups)}
             </div>
             <div class="ala-tab-content" data-content="timeline">
                 ${buildTimelineHTML(mediaTimeline, mediaStats, minTime, maxTime)}
             </div>
             <div class="ala-tab-content" data-content="sync">
                 ${buildSyncHTML(syncGroupInfo, syncData, syncEvents)}
+            </div>
+            <div class="ala-tab-content" data-content="downloads">
+                ${buildDownloadsHTML(downloadStats, syncEvents)}
             </div>
         </div>
     `;
@@ -397,6 +422,7 @@ function openAnalyzerModal(rawText) {
 
     // Optimized filter
     let filterRAF = 0;
+    let regexMode = false;
     function scheduleFilter() {
         cancelAnimationFrame(filterRAF);
         filterRAF = requestAnimationFrame(() => {
@@ -411,16 +437,66 @@ function openAnalyzerModal(rawText) {
             const to = timeTo.value;
             const useTime = !!(from || to);
 
+            let searchRegex = null;
+            if (term && regexMode) {
+                try {
+                    searchRegex = new RegExp(searchInput.value, 'gi');
+                    searchInput.classList.remove('ala-search-error');
+                } catch (e) {
+                    searchInput.classList.add('ala-search-error');
+                    return;
+                }
+            } else {
+                searchInput.classList.remove('ala-search-error');
+            }
+
+            let visibleCount = 0;
             for (let i = 0; i < lineIndex.length; i++) {
                 const { el, level, comp, hm, text } = lineIndex[i];
+                let matchesSearch = true;
+                if (term) {
+                    if (regexMode && searchRegex) {
+                        searchRegex.lastIndex = 0;
+                        matchesSearch = searchRegex.test(text);
+                    } else {
+                        matchesSearch = text.includes(term);
+                    }
+                }
                 const show = (!level || activeLevels.has(level))
                     && (!comp || activeComps.has(comp))
-                    && (!term || text.includes(term))
+                    && matchesSearch
                     && (!useTime || !hm || (hm >= from && hm <= to));
                 if (el.classList.contains('hidden') !== !show) {
                     el.classList.toggle('hidden', !show);
                 }
+                if (show) visibleCount++;
+
+                // Highlight matches (F4)
+                const msgSpan = el.querySelector('.ala-msg');
+                if (msgSpan) {
+                    const original = msgSpan.dataset.original || '';
+                    if (term && show && original) {
+                        let highlighted;
+                        if (regexMode && searchRegex) {
+                            searchRegex.lastIndex = 0;
+                            highlighted = original.replace(searchRegex, m => `<mark class="ala-highlight">${m}</mark>`);
+                        } else {
+                            const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                            highlighted = original.replace(new RegExp(`(${escaped})`, 'gi'), '<mark class="ala-highlight">$1</mark>');
+                        }
+                        msgSpan.innerHTML = renderMessageWithJSON(highlighted);
+                    } else if (original && msgSpan.querySelector('.ala-highlight')) {
+                        msgSpan.innerHTML = renderMessageWithJSON(original);
+                    }
+                }
             }
+
+            // Update visible count
+            const countEl = overlay.querySelector('.ala-visible-count');
+            if (countEl) countEl.textContent = `Mostrando ${visibleCount} de ${lineIndex.length}`;
+
+            // Save filter state (F10)
+            saveFilterState(overlay);
         });
     }
 
@@ -464,9 +540,111 @@ function openAnalyzerModal(rawText) {
     });
 
     // Summarize
-    overlay.querySelector('.ala-summarize-btn').onclick = function() {
+    overlay.querySelector('.ala-summarize-btn').onclick = function () {
         summarizeLogs(overlay, this);
     };
+
+    // ─── Regex Toggle (F3) ───────────────────────────────────────────────
+    const regexToggleBtn = overlay.querySelector('.ala-regex-toggle');
+    regexToggleBtn.onclick = () => {
+        regexMode = !regexMode;
+        regexToggleBtn.classList.toggle('active', regexMode);
+        scheduleFilter();
+    };
+
+    // ─── Export (F1) ─────────────────────────────────────────────────────
+    overlay.querySelector('.ala-export-btn').onclick = () => {
+        const visible = Array.from(overlay.querySelectorAll('.ala-line:not(.hidden)'));
+        const text = visible.map(l => l.dataset.raw || l.textContent).join('\n');
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `log_export_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    // ─── Copy Line (F5) ─────────────────────────────────────────────────
+    overlay.querySelectorAll('.ala-line').forEach(line => {
+        line.addEventListener('click', (e) => {
+            if (e.target.closest('.ala-line-bookmark') || e.target.closest('.ala-explain-btn') || e.target.closest('.ala-json-toggle') || e.target.closest('.ala-json-content')) return;
+            const raw = line.dataset.raw || line.textContent;
+            navigator.clipboard.writeText(raw).then(() => {
+                const toast = document.createElement('div');
+                toast.className = 'ala-toast';
+                toast.textContent = '✓ Copiado';
+                line.style.position = 'relative';
+                line.appendChild(toast);
+                setTimeout(() => toast.remove(), 1500);
+            });
+        });
+    });
+
+    // ─── Dark Mode (F19) ────────────────────────────────────────────────
+    const darkToggle = overlay.querySelector('.ala-dark-toggle');
+    function applyDarkMode(dark) {
+        overlay.querySelector('.ala-modal').classList.toggle('ala-dark', dark);
+        darkToggle.innerHTML = dark ? '&#9788;' : '&#9789;';
+        try { localStorage.setItem('logAnalyzer_darkMode', dark ? '1' : '0'); } catch (e) { }
+        try { if (chrome?.storage?.local) chrome.storage.local.set({ logAnalyzerDarkMode: dark }); } catch (e) { }
+    }
+    try {
+        const saved = localStorage.getItem('logAnalyzer_darkMode');
+        if (saved === '1') applyDarkMode(true);
+    } catch (e) { }
+    darkToggle.onclick = () => {
+        const isDark = overlay.querySelector('.ala-modal').classList.contains('ala-dark');
+        applyDarkMode(!isDark);
+    };
+
+    // ─── Sync Button (F15) ──────────────────────────────────────────────
+    const syncBtn = overlay.querySelector('.ala-sync-btn');
+    syncBtn.onclick = () => {
+        const syncPayload = {
+            deviceInfo,
+            healthData: healthData.length > 0 ? { lastCpu: healthData[healthData.length - 1].cpu, lastRam: healthData[healthData.length - 1].ram } : null,
+            memoryTrend,
+            apiStats,
+            errorCount: parsed.filter(p => p.level === 'ERROR').length,
+            warningCount: parsed.filter(p => p.level === 'WARNING').length,
+            totalLines: parsed.length,
+            timeRange: { from: minTime, to: maxTime },
+            syncGroupInfo,
+            timestamp: Date.now()
+        };
+        try {
+            if (chrome?.runtime?.sendMessage) {
+                chrome.runtime.sendMessage({ type: 'SYNC_LOG_DATA', payload: syncPayload }, () => {
+                    syncBtn.innerHTML = '&#9989; Sincronizado';
+                    syncBtn.classList.add('ala-synced');
+                    setTimeout(() => { syncBtn.innerHTML = '&#128279; Sync'; syncBtn.classList.remove('ala-synced'); }, 3000);
+                });
+            }
+        } catch (e) { console.error('Sync error:', e); }
+    };
+
+    // ─── JSON Toggle (F21) ──────────────────────────────────────────────
+    overlay.addEventListener('click', (e) => {
+        const toggle = e.target.closest('.ala-json-toggle');
+        if (!toggle) return;
+        e.stopPropagation();
+        const content = toggle.nextElementSibling;
+        if (content && content.classList.contains('ala-json-content')) {
+            const isExpanded = content.style.display !== 'none';
+            content.style.display = isExpanded ? 'none' : 'block';
+            toggle.classList.toggle('ala-json-expanded', !isExpanded);
+        }
+    });
+
+    // ─── Initial Count ──────────────────────────────────────────────────
+    const initCount = overlay.querySelector('.ala-visible-count');
+    if (initCount) initCount.textContent = `Mostrando ${lineIndex.length} de ${lineIndex.length}`;
+
+    // ─── Restore Filter State (F10) ─────────────────────────────────────
+    restoreFilterState(overlay, scheduleFilter);
 
     // ─── Tab Switching ───────────────────────────────────────────────────
     overlay.querySelectorAll('.ala-tab').forEach(tab => {
@@ -656,7 +834,7 @@ function buildApiStats(apiHealth) {
 }
 
 // ─── HTML Builders ───────────────────────────────────────────────────────────
-function buildDashboardHTML(deviceInfo, healthData, memoryTrend, rebootInfo, apiStats, syncGroupInfo) {
+function buildDashboardHTML(deviceInfo, healthData, memoryTrend, rebootInfo, apiStats, syncGroupInfo, errorGroups) {
     const di = deviceInfo;
 
     // Device info card
@@ -681,8 +859,8 @@ function buildDashboardHTML(deviceInfo, healthData, memoryTrend, rebootInfo, api
                     ${syncGroupInfo.group ? `<div class="ala-dash-item ala-dash-item-full"><span class="ala-dash-label">Grupo</span><span class="ala-dash-value">${escapeHtml(syncGroupInfo.group)}</span></div>` : ''}
                     ${syncGroupInfo.version ? `<div class="ala-dash-item"><span class="ala-dash-label">Sync Version</span><span class="ala-dash-value">${escapeHtml(syncGroupInfo.version)}</span></div>` : ''}
                     ${syncGroupInfo.members ? `<div class="ala-dash-item ala-dash-item-full"><span class="ala-dash-label">Miembros</span><span class="ala-dash-value">${syncGroupInfo.members.map(m =>
-                        `<span class="ala-member ${m.role === 'Master' ? 'ala-member-master' : 'ala-member-slave'}">${m.ip} <small>${m.role}</small></span>`
-                    ).join(' ')}</span></div>` : ''}
+        `<span class="ala-member ${m.role === 'Master' ? 'ala-member-master' : 'ala-member-slave'}">${m.ip} <small>${m.role}</small></span>`
+    ).join(' ')}</span></div>` : ''}
                 </div>
             ` : ''}
         </div>
@@ -751,9 +929,9 @@ function buildDashboardHTML(deviceInfo, healthData, memoryTrend, rebootInfo, api
             <div class="ala-dash-card-title">Estado de APIs</div>
             <div class="ala-api-grid">
                 ${Object.entries(apiStats).map(([name, s]) => {
-                    const rate = s.total > 0 ? ((s.success / s.total) * 100).toFixed(0) : 0;
-                    const status = s.fail === 0 ? 'ok' : (rate >= 80 ? 'warn' : 'danger');
-                    return `
+        const rate = s.total > 0 ? ((s.success / s.total) * 100).toFixed(0) : 0;
+        const status = s.fail === 0 ? 'ok' : (rate >= 80 ? 'warn' : 'danger');
+        return `
                         <div class="ala-api-card ala-api-${status}">
                             <div class="ala-api-name">${escapeHtml(name)}</div>
                             <div class="ala-api-rate">${rate}%</div>
@@ -761,12 +939,13 @@ function buildDashboardHTML(deviceInfo, healthData, memoryTrend, rebootInfo, api
                             ${s.errors.length > 0 ? `<div class="ala-api-error">${escapeHtml(s.errors[s.errors.length - 1])}</div>` : ''}
                         </div>
                     `;
-                }).join('')}
+    }).join('')}
             </div>
         </div>
     ` : '';
 
-    return `<div class="ala-dashboard">${deviceCard}${alertsCard}${chartCard}${apiCards}</div>`;
+    const errorGroupCard = buildErrorGroupHTML(errorGroups);
+    return `<div class="ala-dashboard">${deviceCard}${alertsCard}${chartCard}${apiCards}${errorGroupCard}</div>`;
 }
 
 function buildChartBars(healthData) {
@@ -970,6 +1149,147 @@ function buildChartXLabelsFromSync(data) {
         labels += `<span>${data[i].time}</span>`;
     }
     return labels;
+}
+
+// ─── New Builder Functions ────────────────────────────────────────────────────
+function buildErrorGroups(parsed) {
+    const groups = {};
+    parsed.forEach(p => {
+        if (p.level === 'ERROR' || p.level === 'WARNING') {
+            const key = (p.message || '').replace(/\d{4}-\d{2}-\d{2}/g, 'DATE').replace(/\d{2}:\d{2}:\d{2}/g, 'TIME').replace(/\d+\.\d+\.\d+\.\d+/g, 'IP').substring(0, 120);
+            if (!groups[key]) groups[key] = { message: p.message, level: p.level, comp: p.comp, count: 0, firstTime: p.hm, lastTime: p.hm };
+            groups[key].count++;
+            groups[key].lastTime = p.hm;
+        }
+    });
+    return Object.values(groups).filter(g => g.count > 1).sort((a, b) => b.count - a.count);
+}
+
+function buildErrorGroupHTML(errorGroups) {
+    if (!errorGroups || errorGroups.length === 0) return '';
+    const rows = errorGroups.slice(0, 20).map(g => {
+        const levelClass = g.level === 'ERROR' ? 'ala-err-grp-error' : 'ala-err-grp-warn';
+        return `<tr class="${levelClass}"><td>${g.count}</td><td>${escapeHtml(g.comp)}</td><td title="${escapeHtml(g.message)}">${escapeHtml(g.message.substring(0, 100))}${g.message.length > 100 ? '...' : ''}</td><td>${g.firstTime}</td><td>${g.lastTime}</td></tr>`;
+    }).join('');
+    return `
+        <div class="ala-dash-card">
+            <div class="ala-dash-card-title">Errores Frecuentes</div>
+            <div class="ala-sync-events-container">
+                <table class="ala-tl-table">
+                    <thead><tr><th>#</th><th>Componente</th><th>Mensaje</th><th>Primer</th><th>\xDAltimo</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        </div>
+    `;
+}
+
+function buildDownloadStats(downloadData, syncEvents) {
+    const stats = { downloading: 0, idle: 0, complete: 0, error: 0, events: downloadData };
+    downloadData.forEach(d => { if (stats[d.type] !== undefined) stats[d.type]++; });
+    const integrityFails = syncEvents.filter(e => e.event === 'Integrity Fail');
+    stats.integrityFails = integrityFails;
+    return stats;
+}
+
+function buildDownloadsHTML(stats, syncEvents) {
+    if (!stats || stats.events.length === 0) {
+        const intFails = syncEvents.filter(e => e.event === 'Integrity Fail');
+        if (intFails.length === 0) return '<div class="ala-empty-tab">No se detectaron eventos de descarga en este log.</div>';
+    }
+
+    const cards = `
+        <div class="ala-api-grid">
+            <div class="ala-api-card ala-api-ok"><div class="ala-api-name">Completadas</div><div class="ala-api-rate">${stats.complete}</div></div>
+            <div class="ala-api-card ${stats.error > 0 ? 'ala-api-danger' : 'ala-api-ok'}"><div class="ala-api-name">Errores</div><div class="ala-api-rate">${stats.error}</div></div>
+            <div class="ala-api-card ala-api-warn"><div class="ala-api-name">En Descarga</div><div class="ala-api-rate">${stats.downloading}</div></div>
+            <div class="ala-api-card ${stats.integrityFails.length > 0 ? 'ala-api-danger' : 'ala-api-ok'}"><div class="ala-api-name">Integridad Fallida</div><div class="ala-api-rate">${stats.integrityFails.length}</div></div>
+        </div>
+    `;
+
+    const eventRows = stats.events.slice(-50).reverse().map(d => {
+        const cls = d.type === 'error' ? 'ala-sync-evt-error' : d.type === 'complete' ? 'ala-sync-evt-ok' : '';
+        return `<tr class="${cls}"><td>${d.time}</td><td>${escapeHtml(d.type)}</td><td>${escapeHtml(d.message.substring(0, 120))}</td></tr>`;
+    }).join('');
+
+    const intRows = stats.integrityFails.map(f =>
+        `<tr class="ala-sync-evt-error"><td>${f.time}</td><td>${escapeHtml(f.detail)}</td></tr>`
+    ).join('');
+
+    return `
+        <div class="ala-sync-tab">
+            <div class="ala-dash-card">
+                <div class="ala-dash-card-title">Estado de Descargas</div>
+                ${cards}
+            </div>
+            ${eventRows ? `
+            <div class="ala-dash-card">
+                <div class="ala-dash-card-title">Eventos de Descarga (\xDAltimos 50)</div>
+                <div class="ala-sync-events-container">
+                    <table class="ala-tl-table">
+                        <thead><tr><th>Hora</th><th>Tipo</th><th>Detalle</th></tr></thead>
+                        <tbody>${eventRows}</tbody>
+                    </table>
+                </div>
+            </div>` : ''}
+            ${intRows ? `
+            <div class="ala-dash-card">
+                <div class="ala-dash-card-title">Problemas de Integridad</div>
+                <div class="ala-sync-events-container">
+                    <table class="ala-tl-table">
+                        <thead><tr><th>Hora</th><th>Detalle</th></tr></thead>
+                        <tbody>${intRows}</tbody>
+                    </table>
+                </div>
+            </div>` : ''}
+        </div>
+    `;
+}
+
+function renderMessageWithJSON(msgHtml) {
+    return msgHtml.replace(/\{(?:[^{}]|\{[^{}]*\}){15,}\}/g, (match) => {
+        try {
+            const unescaped = match.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+            const parsed = JSON.parse(unescaped);
+            const formatted = JSON.stringify(parsed, null, 2);
+            return `<span class="ala-json-toggle" title="Click para ver JSON">{\u2026}</span><pre class="ala-json-content" style="display:none">${escapeHtml(formatted)}</pre>`;
+        } catch (e) { return match; }
+    });
+}
+
+function saveFilterState(overlay) {
+    try {
+        const levels = Array.from(overlay.querySelectorAll('.ala-level-chip')).map(b => ({ level: b.dataset.level, active: b.classList.contains('active') }));
+        const comps = Array.from(overlay.querySelectorAll('.ala-comp-chip')).map(b => ({ comp: b.dataset.comp, active: b.classList.contains('active') }));
+        const search = overlay.querySelector('.ala-search')?.value || '';
+        const from = overlay.querySelector('.ala-time-from')?.value || '';
+        const to = overlay.querySelector('.ala-time-to')?.value || '';
+        localStorage.setItem('logAnalyzer_filterState', JSON.stringify({ levels, comps, search, from, to }));
+    } catch (e) { }
+}
+
+function restoreFilterState(overlay, scheduleFilter) {
+    try {
+        const saved = localStorage.getItem('logAnalyzer_filterState');
+        if (!saved) return;
+        const state = JSON.parse(saved);
+        if (state.levels) {
+            state.levels.forEach(s => {
+                const chip = overlay.querySelector(`.ala-level-chip[data-level="${s.level}"]`);
+                if (chip) chip.classList.toggle('active', s.active);
+            });
+        }
+        if (state.comps) {
+            state.comps.forEach(s => {
+                const chip = overlay.querySelector(`.ala-comp-chip[data-comp="${s.comp}"]`);
+                if (chip) chip.classList.toggle('active', s.active);
+            });
+        }
+        if (state.search) { const si = overlay.querySelector('.ala-search'); if (si) si.value = state.search; }
+        if (state.from) { const tf = overlay.querySelector('.ala-time-from'); if (tf) tf.value = state.from; }
+        if (state.to) { const tt = overlay.querySelector('.ala-time-to'); if (tt) tt.value = state.to; }
+        scheduleFilter();
+    } catch (e) { }
 }
 
 // ─── Gemini API ──────────────────────────────────────────────────────────────
@@ -1928,4 +2248,226 @@ const ALA_CSS = `
     font-size: 14px;
     padding: 40px;
 }
+
+/* ─── Search Group (F3) ────────────────────────────────────────────────── */
+.ala-search-group {
+    flex: 1;
+    display: flex;
+    gap: 0;
+}
+.ala-search-group .ala-search {
+    flex: 1;
+    border-radius: 6px 0 0 6px;
+}
+.ala-regex-toggle {
+    background: #f5f5f5;
+    border: 1px solid #c0c0c0;
+    border-left: none;
+    border-radius: 0 6px 6px 0;
+    padding: 0 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: #999;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.ala-regex-toggle:hover { background: #eee; }
+.ala-regex-toggle.active { background: #eef2ff; color: #4f46e5; border-color: #c7d2fe; }
+.ala-search-error { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220,38,38,0.15) !important; }
+
+/* ─── Dark Mode & Sync Buttons ─────────────────────────────────────────── */
+.ala-dark-toggle, .ala-sync-btn {
+    background: none;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    padding: 0 10px;
+    height: 34px;
+    font-size: 14px;
+    cursor: pointer;
+    color: #666;
+    transition: all 0.15s;
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+}
+.ala-dark-toggle:hover { background: #f0f0f4; }
+.ala-sync-btn { font-size: 12px; }
+.ala-sync-btn:hover { background: #eef2ff; border-color: #c7d2fe; color: #4f46e5; }
+.ala-sync-btn.ala-synced { background: #dcfce7; border-color: #bbf7d0; color: #166534; }
+
+/* ─── Export Button (F1) ───────────────────────────────────────────────── */
+.ala-export-btn {
+    background: #f5f5f5;
+    border: 1px solid #d0d0d0;
+    color: #555;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+    transition: all 0.15s;
+}
+.ala-export-btn:hover { background: #eee; border-color: #bbb; }
+
+/* ─── Visible Count ────────────────────────────────────────────────────── */
+.ala-visible-count {
+    font-size: 11px;
+    color: #888;
+    padding: 6px 0;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+/* ─── Highlight (F4) ───────────────────────────────────────────────────── */
+.ala-highlight {
+    background: #fef08a;
+    border-radius: 2px;
+    padding: 0 1px;
+    color: #000;
+}
+
+/* ─── Toast (F5) ───────────────────────────────────────────────────────── */
+.ala-toast {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: #1e293b;
+    color: #fff;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: 'Inter', sans-serif;
+    z-index: 10;
+    animation: ala-toast-fade 1.5s ease forwards;
+    pointer-events: none;
+}
+@keyframes ala-toast-fade {
+    0% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { opacity: 0; }
+}
+.ala-line { cursor: pointer; }
+
+/* ─── JSON Viewer (F21) ───────────────────────────────────────────────── */
+.ala-json-toggle {
+    display: inline-block;
+    background: #eef2ff;
+    color: #4f46e5;
+    padding: 1px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    transition: all 0.15s;
+    border: 1px solid #c7d2fe;
+}
+.ala-json-toggle:hover { background: #c7d2fe; }
+.ala-json-toggle.ala-json-expanded { background: #4f46e5; color: #fff; }
+.ala-json-content {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin: 6px 0;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #334155;
+}
+
+/* ─── Error Groups (F7a) ──────────────────────────────────────────────── */
+.ala-err-grp-error td { color: #dc2626; }
+.ala-err-grp-warn td { color: #d97706; }
+.ala-err-grp-error td:first-child, .ala-err-grp-warn td:first-child {
+    font-weight: 700;
+    font-size: 14px;
+    text-align: center;
+}
+
+/* ─── Dark Mode (F19) ────────────────────────────────────────────────── */
+.ala-dark { background: #0f172a; color: #e2e8f0; }
+.ala-dark .ala-header { background: #1e293b; border-color: #334155; }
+.ala-dark .ala-title { color: #f1f5f9; }
+.ala-dark .ala-search { background: #1e293b; border-color: #475569; color: #e2e8f0; }
+.ala-dark .ala-search::placeholder { color: #64748b; }
+.ala-dark .ala-chip { background: #1e293b; border-color: #475569; color: #94a3b8; }
+.ala-dark .ala-chip:hover { background: #334155; }
+.ala-dark .ala-chip.active { background: #312e81; border-color: #4f46e5; color: #a5b4fc; }
+.ala-dark .ala-level-chip[data-level="ERROR"].active { color: #f87171; background: #450a0a; border-color: #7f1d1d; }
+.ala-dark .ala-level-chip[data-level="WARNING"].active { color: #fbbf24; background: #451a03; border-color: #78350f; }
+.ala-dark .ala-level-chip[data-level="INFO"].active { color: #60a5fa; background: #172554; border-color: #1e3a5f; }
+.ala-dark .ala-level-chip[data-level="DEBUG"].active { color: #94a3b8; background: #1e293b; border-color: #475569; }
+.ala-dark .ala-level-chip[data-level="SUCCESS"].active { color: #4ade80; background: #052e16; border-color: #166534; }
+.ala-dark .ala-tab-bar { background: #1e293b; border-color: #334155; }
+.ala-dark .ala-tab { color: #64748b; }
+.ala-dark .ala-tab:hover { color: #94a3b8; background: #334155; }
+.ala-dark .ala-tab.active { color: #818cf8; border-bottom-color: #818cf8; }
+.ala-dark .ala-log-body { background: #0f172a; }
+.ala-dark .ala-line:hover { background: #1e293b; }
+.ala-dark .ala-date, .ala-dark .ala-time { color: #64748b; }
+.ala-dark .ala-info { color: #60a5fa; }
+.ala-dark .ala-debug { color: #94a3b8; }
+.ala-dark .ala-warning { color: #fbbf24; }
+.ala-dark .ala-error { color: #f87171; }
+.ala-dark .ala-success { color: #4ade80; }
+.ala-dark .ala-comp { color: #c084fc; }
+.ala-dark .ala-msg { color: #cbd5e1; }
+.ala-dark .ala-unparsed { color: #64748b; }
+.ala-dark .ala-dash-card { background: #1e293b; border-color: #334155; }
+.ala-dark .ala-dash-card-title { color: #f1f5f9; }
+.ala-dark .ala-dash-label { color: #64748b; }
+.ala-dark .ala-dash-value { color: #e2e8f0; }
+.ala-dark .ala-chart { border-color: #334155; }
+.ala-dark .ala-chart-y-axis { background: #1e293b; border-color: #334155; color: #64748b; }
+.ala-dark .ala-chart-area { background: #0f172a; }
+.ala-dark .ala-chart-x-labels { color: #64748b; }
+.ala-dark .ala-alert-ok { background: #052e16; border-color: #166534; color: #4ade80; }
+.ala-dark .ala-alert-warn { background: #451a03; border-color: #78350f; color: #fbbf24; }
+.ala-dark .ala-alert-danger { background: #450a0a; border-color: #7f1d1d; color: #f87171; }
+.ala-dark .ala-alert-neutral { background: #1e293b; border-color: #334155; color: #94a3b8; }
+.ala-dark .ala-api-ok { background: #052e16; border-color: #166534; }
+.ala-dark .ala-api-warn { background: #451a03; border-color: #78350f; }
+.ala-dark .ala-api-danger { background: #450a0a; border-color: #7f1d1d; }
+.ala-dark .ala-tl-table th { color: #94a3b8; border-color: #334155; }
+.ala-dark .ala-tl-table td { color: #cbd5e1; border-color: #1e293b; }
+.ala-dark .ala-tl-table tbody tr:hover { background: #334155; }
+.ala-dark .ala-summary { background: #1e293b; border-color: #334155; color: #e2e8f0; }
+.ala-dark .ala-explanation { background: #1e293b; border-color: #7f1d1d; color: #e2e8f0; }
+.ala-dark .ala-close-btn { border-color: #475569; color: #94a3b8; }
+.ala-dark .ala-close-btn:hover { background: #7f1d1d; border-color: #dc2626; color: #f87171; }
+.ala-dark .ala-bookmark-count { background: #312e81; color: #a5b4fc; }
+.ala-dark .ala-bookmark-prev, .ala-dark .ala-bookmark-next { border-color: #475569; color: #94a3b8; }
+.ala-dark .ala-line.ala-bookmarked { background: #422006 !important; border-bottom-color: #78350f; }
+.ala-dark .ala-time-input { background: #1e293b; border-color: #475569; color: #e2e8f0; }
+.ala-dark .ala-time-label { color: #94a3b8; }
+.ala-dark .ala-summarize-btn { background: #4f46e5; }
+.ala-dark .ala-summarize-btn:hover { background: #4338ca; }
+.ala-dark .ala-highlight { background: #854d0e; color: #fef08a; }
+.ala-dark .ala-json-toggle { background: #312e81; border-color: #4f46e5; color: #a5b4fc; }
+.ala-dark .ala-json-toggle:hover { background: #4f46e5; color: #fff; }
+.ala-dark .ala-toast { background: #f1f5f9; color: #1e293b; }
+.ala-dark .ala-dark-toggle, .ala-dark .ala-sync-btn { border-color: #475569; color: #94a3b8; }
+.ala-dark .ala-export-btn { background: #1e293b; border-color: #475569; color: #94a3b8; }
+.ala-dark .ala-export-btn:hover { background: #334155; }
+.ala-dark .ala-regex-toggle { background: #1e293b; border-color: #475569; color: #64748b; }
+.ala-dark .ala-regex-toggle.active { background: #312e81; border-color: #4f46e5; color: #a5b4fc; }
+.ala-dark .ala-visible-count { color: #64748b; }
+.ala-dark .ala-comp-toggle { background: #0f172a; border-color: #475569; color: #94a3b8; }
+.ala-dark .ala-explain-btn { background: #1e293b; border-color: #475569; color: #94a3b8; }
+.ala-dark .ala-member-master { background: #451a03; color: #fbbf24; border-color: #78350f; }
+.ala-dark .ala-member-slave { background: #052e16; color: #4ade80; border-color: #166534; }
+.ala-dark .ala-sync-master { background: #451a03; border-color: #78350f; }
+.ala-dark .ala-sync-slave { background: #052e16; border-color: #166534; }
+.ala-dark .ala-tl-track { background: #1e293b; border-color: #334155; }
+.ala-dark .ala-backdrop { background: rgba(0,0,0,0.7); }
+.ala-dark .ala-tag { background: #312e81; color: #a5b4fc; }
+.ala-dark .ala-log-body::-webkit-scrollbar-track { background: #1e293b; }
+.ala-dark .ala-log-body::-webkit-scrollbar-thumb { background: #475569; }
 `;
