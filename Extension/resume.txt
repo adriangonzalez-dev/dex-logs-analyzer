@@ -4,18 +4,38 @@
 
 1. ESTRUCTURA DE CADA LÍNEA
 -----------------------------------------
-El formato general de cada línea es el siguiente:
+Existen dos variantes de formato según la versión del player.
+Ambas son soportadas automáticamente por la extensión.
+
+FORMATO A (con fecha — archivos DexPlayer-YYYYMMDD-N.log):
 YYYY-MM-DD HH:mm:ss.SS NIVEL [Componente] Mensaje libre
 
 Ejemplo:
 2026-02-19 00:00:26.59 INFO [Media tags manager] Media tags status set
 
+FORMATO B (sin fecha — archivos log_export_*.txt y DexPlayer-*_otra_estructura*.log):
+HH:mm:ss.SS NIVEL [Componente] Mensaje libre
+
+Ejemplo:
+00:01:09.29 INFO [System Manager] CPU: 13.47%. Used RAM: 1129.01 Mb
+
+Nota: El Formato B se presenta tanto en archivos log_export como en archivos DexPlayer
+de players Android/Cordova. Los players Android incluyen además:
+- Bloque de inicialización con banner "=====" y "Dex Player <version>"
+- Línea "Device UserAgent:" (en lugar de "OffsetsManager USERAGENT:")
+- Línea Platform "android" en mensaje de [Main] (en lugar de "OffsetsManager PLATFORM:")
+- Componente [Global Error Handler] para errores Cordova al inicio
+- Stack traces de ERROR sin componente (líneas de continuación)
+
 Campos desglosados:
-- Fecha: YYYY-MM-DD (Ej: 2026-02-19)
+- Fecha (solo Formato A): YYYY-MM-DD (Ej: 2026-02-19)
 - Hora: HH:mm:ss.SS (Ej: 00:00:26.59)
 - NIVEL: Criticidad / Categoría del evento.
 - [Componente]: Módulo del sistema que generó el log (siempre entre corchetes).
 - Mensaje: Detalles de estado, paths de archivos, jsons de sincronización, comandos recibidos, etc.
+
+Nota: En el Formato B la fecha no está presente en cada línea.
+El contenido de los mensajes, niveles y componentes es idéntico en ambos formatos.
 
 2. NIVELES DE LOG IDENTIFICADOS
 -----------------------------------------
@@ -27,7 +47,8 @@ Campos desglosados:
 
 3. COMPONENTES FRECUENTES (TOP)
 -----------------------------------------
-- [McDonald's Template]: (Manejador de APIs y plantillas para listados de precios, XML fetch, y estado general comercial) ~ 40%
+- [McDonald's Template]: Manejador de APIs y plantillas para listados de precios McDonald's (XML fetch, ProductPricing, estado comercial). Usa "Metadata changed from ... to {...}" y "OffsetsManager PLATFORM/USERAGENT" en mayúsculas.
+- [MENUBOARD_TPL]: Plantilla genérica de menuboard (ej. Burger King). Mensajes con prefijo "[INFO]" interno. Usa "Metadata {...}" (sin "changed from"), "[OffsetsManager] platform/userAgent" en minúsculas/camelCase. Fetch de precios via BKDataManagerV2.
 - [Player]: Lógica pesada, sincronización en grupo, lectura the tags, playlist ended, reproducción de mediass.
 - [System Manager]: Consumos de CPU, Memoria RAM (ej. "CPU: 27.00%. Used RAM: 1124.96 Mb"), tiempos de reboot y Heartbeats vs el Server.
 - [Hardware Policies] & [Input Manager]: Bloqueos del panel físico (Control inhabilitado).

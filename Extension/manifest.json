@@ -5,6 +5,7 @@
   "description": "Smart log analyzer with syntax highlighting, filtering, and Gemini AI.",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "tabs"
   ],
   "host_permissions": [

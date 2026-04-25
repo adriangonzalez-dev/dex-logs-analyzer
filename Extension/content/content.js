@@ -66,9 +66,9 @@ const syncDriftRegex = /ElapsedMasterToSlave\s+(\d+)ms\|IntervalTimeSetted\s+(\d
 const mediaPlayRegex = /PLAY Command received\.\s*Media\s*"([^"]+)"/;
 const rebootRegex = /Device will reboot in (\d+) minutes/;
 const groupMembersRegex = /Members:\s*(.+)/;
-const metadataRegex = /Metadata changed from .+ to (\{.+\})/;
-const platformRegex = /OffsetsManager PLATFORM:\s*(.+)/;
-const useragentRegex = /OffsetsManager USERAGENT:\s*(.+)/;
+const metadataRegex = /(?:Metadata changed from .+ to|Metadata)\s*(\{.+\})/;
+const platformRegex = /(?:OffsetsManager PLATFORM|\[OffsetsManager\]\s*platform):\s*(.+)|Platform\s+"([^"]+)"/;
+const useragentRegex = /(?:OffsetsManager USERAGENT|\[OffsetsManager\]\s*userAgent|Device UserAgent):\s*(.+)/;
 const playerVersionRegex = /^Player Version:\s*(.+)/;
 const firmwareVersionRegex = /^Firmware Version:\s*(.+)/;
 const heartbeatSuccessRegex = /Heartbeat received from server/;
@@ -100,7 +100,7 @@ function openAnalyzerModal(rawText) {
 
     // Parse lines
     const lines = rawText.split('\n');
-    const regex = /^(\d{4}-\d{2}-\d{2})\s(\d{2}:\d{2}:\d{2}\.\d+)\s([A-Z]+)\s(?:(\[[^\]]+\])\s)?(.*)$/;
+    const regex = /^(?:(\d{4}-\d{2}-\d{2})\s)?(\d{2}:\d{2}:\d{2}\.\d+)\s([A-Z]+)\s(?:(\[[^\]]+\])\s)?(.*)$/;
     const components = new Set();
     const parsed = [];
 
@@ -121,7 +121,7 @@ function openAnalyzerModal(rawText) {
         if (!line.trim()) return;
         const match = line.match(regex);
         if (match) {
-            const [, date, time, level, component, message] = match;
+            const [, date = '', time, level, component, message] = match;
             const comp = component || '[General]';
             const hm = time.substring(0, 5);
             components.add(comp);
@@ -215,7 +215,7 @@ function openAnalyzerModal(rawText) {
                 } catch (e) { /* ignore malformed JSON */ }
             }
             const platMatch = message.match(platformRegex);
-            if (platMatch) deviceInfo.platform = platMatch[1].trim();
+            if (platMatch) deviceInfo.platform = (platMatch[1] || platMatch[2]).trim();
             const uaMatch = message.match(useragentRegex);
             if (uaMatch) deviceInfo.userAgent = uaMatch[1].trim();
             const pvMatch = message.match(playerVersionRegex);
@@ -364,7 +364,7 @@ function openAnalyzerModal(rawText) {
         if (p.level) {
             return `<div class="ala-line" data-level="${p.level}" data-comp="${escapeHtml(p.comp)}" data-hm="${p.hm}" data-text="${escapeHtml(p.raw.toLowerCase())}" data-idx="${p.index}" data-raw="${escapeHtml(p.raw)}">` +
                 `<span class="ala-line-bookmark" title="Bookmark"></span>` +
-                `<span class="ala-date">${p.date}</span>` +
+                (p.date ? `<span class="ala-date">${p.date}</span>` : '') +
                 `<span class="ala-time">${p.time}</span>` +
                 `<span class="ala-level ala-${p.level.toLowerCase()}">${p.level}</span>` +
                 `<span class="ala-comp">${escapeHtml(p.comp)}</span>` +
@@ -990,7 +990,7 @@ function buildTimelineHTML(mediaTimeline, mediaStats, minTime, maxTime) {
         const width = Math.max(((endSec - startSec) / totalSpan) * 100, 0.2);
         const dur = formatDuration(endSec - startSec);
         const color = colorMap[playEvents[i].media];
-        const isTemplate = playEvents[i].media.includes('MenuBoard') || playEvents[i].media.includes('Template');
+        const isTemplate = playEvents[i].media.toLowerCase().includes('menuboard') || playEvents[i].media.includes('Template') || playEvents[i].media.startsWith('tpl-');
 
         blocks += `<div class="ala-tl-block ${isTemplate ? 'ala-tl-template' : ''}" ` +
             `style="left:${left}%;width:${width}%;background:${color}" ` +
